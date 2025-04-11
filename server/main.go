@@ -2,11 +2,13 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"go-raft/db"
 	"go-raft/logging"
 	"go-raft/model"
+	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -21,6 +23,9 @@ const (
 	Follower serverRole = iota
 	Candidate
 	Leader
+)
+
+const (
 	BroadcastPeriod    = 3000
 	ElectionMinTimeout = 3001
 	ElectionMaxTimeout = 10000
@@ -72,7 +77,7 @@ func main() {
 		panic(err)
 	}
 	// Init election modul
-	electionTimeOutInterval := rand.Intn(int(ElectionMaxTimeout)-int(ElectionMinTimeout)) + int(ElectionMinTimeout)
+	electionTimeOutInterval := rand.Intn(ElectionMaxTimeout-ElectionMinTimeout) + ElectionMinTimeout
 	electionTimeOutModule := model.NewElectionModule(electionTimeOutInterval)
 
 	// 1/9 on recovery from crash do
@@ -100,6 +105,7 @@ func main() {
 		fmt.Println(err.Error())
 		panic(err)
 	}
+	defer l.Close()
 	for {
 		c, err := l.Accept()
 		if err != nil {
@@ -182,9 +188,9 @@ func (s *Server) syncUp() {
 	if s.role != Leader {
 		return
 	}
-	allNodes, _ := logging.ListRegisterServers()
-	ticker := time.NewTicker(time.Duration(BroadcastPeriod) * time.Millisecond)
+	ticker := time.NewTicker(BroadcastPeriod * time.Millisecond)
 	for t := range ticker.C {
+		allNodes, _ := logging.ListRegisterServers()
 		fmt.Println("Sending heartbeat at ", t)
 		for name, port := range allNodes {
 			if name == s.serverState.Name {
@@ -197,16 +203,23 @@ func (s *Server) syncUp() {
 
 // 5/9 replicating from leader to followers
 func (s *Server) replicateLog(followerName string, followerPort int) {
+	// TODO: Check this
+	if followerName == s.serverState.Name {
+		go s.commitLogEntries()
+		return
+	}
+	// TODO: end
+
 	if _, ok := s.peerData.SentLength[followerName]; !ok {
 		return
 	}
 	prefixLength := s.peerData.SentLength[followerName]
 	suffix := s.logs[prefixLength:]
-	prefixTerm := 0
+	var prefixTerm int
 	if prefixLength > 0 {
 		prefixTerm = parseLogTerm(s.logs[prefixLength-1])
 	}
-	logRequest := model.NewLogRequest(s.leaderNodeName, s.serverState.CurrentTerm, prefixLength, prefixTerm, s.serverState.CommitLength, suffix)
+	logRequest := model.NewLogRequest(s.serverState.Name, s.serverState.CurrentTerm, prefixLength, prefixTerm, s.serverState.CommitLength, suffix)
 	s.sendMessageToFollowers(logRequest.String(), followerPort)
 }
 
@@ -398,11 +411,19 @@ func (s *Server) handleConnection(c net.Conn) {
 		// Read request
 		data, err := bufio.NewReader(c).ReadString('\n')
 		if err != nil {
-			fmt.Printf("Error in reading request of server %v ", s.serverState)
+			if !errors.Is(err, io.EOF) {
+				fmt.Println("error in reading request ", err.Error())
+				panic(err)
+			}
 			continue
 		}
 		request := strings.TrimSpace(data)
-		fmt.Printf("> Message: %s", request)
+		// !
+		if request == "invalid command" || request == "Handling Log Reponse successful" {
+			fmt.Println(request)
+			continue
+		}
+		fmt.Printf("> Message: %s \n", request)
 		// Handle request
 		// Log (Request and Response)
 		var response string
@@ -415,10 +436,10 @@ func (s *Server) handleConnection(c net.Conn) {
 		}
 		// Vote (Request and Response)
 		if strings.HasPrefix(request, "VoteRequest") {
-			fmt.Println("Hanlding VoteRequest")
+			fmt.Println("Handling VoteRequest")
 			response = s.handleVoteRequest(request)
 		} else if strings.HasPrefix(request, "VoteResponse") {
-			fmt.Println("Hanlding VoteResponse")
+			fmt.Println("Handling VoteResponse")
 			s.handleVoteResponse(request)
 		}
 		// 4/9 Broadcasting messages
@@ -439,8 +460,10 @@ func (s *Server) handleConnection(c net.Conn) {
 				// on request to broadcast msg at node nodeId do
 				logMessage := createLogMessage(request, s.serverState.CurrentTerm)
 				s.logs = append(s.logs, logMessage)
-				s.db.LogCommand(logMessage, s.serverState.Name)
 				s.peerData.AckedLength[s.serverState.Name] = len(s.logs)
+				if err := s.db.LogCommand(logMessage, s.serverState.Name); err != nil {
+					response = "Logging command meets error"
+				}
 				allNodes, err := logging.ListRegisterServers()
 				if err != nil {
 					response = fmt.Sprintf("Meet error when list all servers %s", err.Error())

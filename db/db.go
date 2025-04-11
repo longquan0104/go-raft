@@ -59,7 +59,7 @@ func ValidateQuery(query string) error {
 			return errors.New("input missing key or value or has a malformed format")
 		}
 	default:
-		return errors.New("invalid command " + operations)
+		return errors.New("invalid command")
 	}
 	return nil
 }
