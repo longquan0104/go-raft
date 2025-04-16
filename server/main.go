@@ -220,7 +220,7 @@ func (s *Server) replicateLog(followerName string, followerPort int) {
 		return
 	}
 	prefixLength := s.peerData.SentLength[followerName]
-	// suffix := s.logs[prefixLength:] ! it suppose to be this
+	//! suffix := s.logs[prefixLength:] ! it suppose to be this
 	suffix := s.logs[s.peerData.SentLength[followerName]:]
 	var prefixTerm int
 	if prefixLength > 0 {
@@ -370,6 +370,7 @@ func (s *Server) handleVoteResponse(request string) {
 func (s *Server) sendMessageToFollowers(message string, port int) {
 	c, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(port))
 	if err != nil {
+		fmt.Println("Error in sendMessageToFollowers", err)
 		s.peerData.SuspectedNodes[port] = true
 		return
 	}
