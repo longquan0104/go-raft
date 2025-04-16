@@ -19,13 +19,13 @@ func RegisterServer(name, port string) error {
 }
 
 func ListRegisterServers() (map[string]int, error) {
-	registerdLines, err := utils.Read(registryFileName)
+	fileLines, err := utils.Read(registryFileName)
 	if err != nil {
 		return nil, err
 	}
 
 	servers := map[string]int{}
-	for _, line := range registerdLines {
+	for _, line := range fileLines {
 		splits := strings.Split(line, "_")
 		name := splits[0]
 		port, err := strconv.Atoi(splits[1])

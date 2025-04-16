@@ -67,6 +67,7 @@ func ValidateQuery(query string) error {
 // ExecuteQuery
 func (d *Database) ExecuteQuery(query string) (string, error) {
 	if err := ValidateQuery(query); err != nil {
+		fmt.Println("Errors in exectue query", err.Error())
 		return "", err
 	}
 	var resp string

@@ -66,7 +66,7 @@ type Server struct {
 	electionModule *model.ElectionModule
 }
 
-// 1/9 on initialisation do
+// 1/9 on initialization do
 func main() {
 	// Init server
 	// Get server (name, port)
@@ -76,7 +76,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	// Init election modul
+	// Init election module
 	electionTimeOutInterval := rand.Intn(ElectionMaxTimeout-ElectionMinTimeout) + ElectionMinTimeout
 	electionTimeOutModule := model.NewElectionModule(electionTimeOutInterval)
 
@@ -99,13 +99,13 @@ func main() {
 	}
 	s.serverState.LogServerPersistedState()
 
-	go s.electionTimer()
 	l, err := net.Listen("tcp", ":"+*port)
 	if err != nil {
 		fmt.Println(err.Error())
 		panic(err)
 	}
 	defer l.Close()
+	go s.electionTimer()
 	for {
 		c, err := l.Accept()
 		if err != nil {
@@ -137,7 +137,7 @@ func (s *Server) electionTimer() {
 }
 
 func (s *Server) startElection() {
-	s.serverState.CurrentTerm += 1
+	s.serverState.CurrentTerm++
 	s.role = Candidate
 	s.serverState.VotedFor = s.serverState.Name
 	s.peerData.VotesReceived = map[string]bool{s.serverState.Name: true}
@@ -166,15 +166,20 @@ func (s *Server) checkElectionResult() {
 		return
 	}
 	votesCount := 0
-	allServers, _ := logging.ListRegisterServers()
+	allServers, err := logging.ListRegisterServers()
+	if err != nil {
+		fmt.Println("errors:", err.Error())
+	}
 	for sv := range allServers {
 		if v, ok := s.peerData.VotesReceived[sv]; ok && v {
 			votesCount++
 		}
 	}
+
+	// quorum must be an odd number. eg 5 server has approved of 3 servers for at least
 	if votesCount >= (len(allServers)+1)/2 {
 		// Got major vote accept
-		fmt.Printf("Server %s win election with votes %d \n", s.serverState.Name, votesCount)
+		fmt.Printf("Server %s win election with votes %d from %d servers \n", s.serverState.Name, votesCount, len(allServers))
 		s.role = Leader
 		s.leaderNodeName = s.serverState.Name
 		s.peerData.VotesReceived = make(map[string]bool)
@@ -185,9 +190,9 @@ func (s *Server) checkElectionResult() {
 
 // Sync up and Sending HeartBeat
 func (s *Server) syncUp() {
-	if s.role != Leader {
-		return
-	}
+	// if s.role != Leader {
+	// 	return
+	// }
 	ticker := time.NewTicker(BroadcastPeriod * time.Millisecond)
 	for t := range ticker.C {
 		allNodes, _ := logging.ListRegisterServers()
@@ -196,6 +201,7 @@ func (s *Server) syncUp() {
 			if name == s.serverState.Name {
 				continue
 			}
+			fmt.Printf("Sending heartbeat to server %s at %v \n", name, t)
 			s.replicateLog(name, port)
 		}
 	}
@@ -214,7 +220,8 @@ func (s *Server) replicateLog(followerName string, followerPort int) {
 		return
 	}
 	prefixLength := s.peerData.SentLength[followerName]
-	suffix := s.logs[prefixLength:]
+	// suffix := s.logs[prefixLength:] ! it suppose to be this
+	suffix := s.logs[s.peerData.SentLength[followerName]:]
 	var prefixTerm int
 	if prefixLength > 0 {
 		prefixTerm = parseLogTerm(s.logs[prefixLength-1])
@@ -240,17 +247,16 @@ func (s *Server) handleVoteRequest(request string) string {
 	if len(s.logs) > 0 {
 		lastTerm = parseLogTerm(s.logs[(len(s.logs) - 1)])
 	}
+	// ! supposed to be voteRequest.CandidateLogLength > len(s.logs)
 	logOk := voteRequest.CandidateLogTerm > lastTerm ||
-		(voteRequest.CandidateLogTerm == lastTerm && voteRequest.CandidateLogLength > len(s.logs))
+		(voteRequest.CandidateLogTerm == lastTerm && voteRequest.CandidateLogLength >= len(s.logs))
 	if voteRequest.CandidateTerm == s.serverState.CurrentTerm && logOk && (s.serverState.VotedFor == voteRequest.CandidateId || s.serverState.VotedFor == "") {
 		s.serverState.VotedFor = voteRequest.CandidateId
 		// Send message to every node
 		s.serverState.LogServerPersistedState()
-		voteResponse := model.NewVoteResponse(s.serverState.Name, s.serverState.CurrentTerm, true)
-		return voteResponse.String()
+		return model.NewVoteResponse(s.serverState.Name, s.serverState.CurrentTerm, true).String()
 	} else {
-		voteResponse := model.NewVoteResponse(s.serverState.Name, s.serverState.CurrentTerm, false)
-		return voteResponse.String()
+		return model.NewVoteResponse(s.serverState.Name, s.serverState.CurrentTerm, false).String()
 	}
 }
 
@@ -302,7 +308,7 @@ func (s *Server) handleLogResponse(request string) string {
 		s.serverState.VotedFor = ""
 		go s.electionTimer()
 	}
-	return "Handling Log Reponse successful"
+	return "Handling Log Response successful"
 }
 
 // 9/9 leader committing log entries
@@ -383,11 +389,14 @@ func (s *Server) handleLogRequest(request string) string {
 	if logRequest.CurrentTerm > s.serverState.CurrentTerm {
 		s.serverState.CurrentTerm = logRequest.CurrentTerm
 		s.serverState.VotedFor = ""
+		// if s.role == Leader {
+		// 	go s.electionTimer()
+		// }
+	}
+	if s.serverState.CurrentTerm == logRequest.CurrentTerm {
 		if s.role == Leader {
 			go s.electionTimer()
 		}
-	}
-	if s.serverState.CurrentTerm == logRequest.CurrentTerm {
 		s.role = Follower
 		s.leaderNodeName = logRequest.LeaderId
 	}
@@ -419,7 +428,7 @@ func (s *Server) handleConnection(c net.Conn) {
 		}
 		request := strings.TrimSpace(data)
 		// !
-		if request == "invalid command" || request == "Handling Log Reponse successful" {
+		if request == "invalid command" || request == "Handling Log Response successful" {
 			fmt.Println(request)
 			continue
 		}
