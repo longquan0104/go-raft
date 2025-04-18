@@ -21,13 +21,7 @@ func (l *LogRequest) String() string {
 func ParseLogRequest(message string) (*LogRequest, error) {
 	splits := strings.Split(message, "|")
 	leaderId := splits[1]
-	var err error
-	_, err = strconv.Atoi(splits[2])
-	if err != nil {
-		return nil, err
-	}
-	currentTerm, _ := strconv.Atoi(splits[2])
-	_, err = strconv.Atoi(splits[2])
+	currentTerm, err := strconv.Atoi(splits[2])
 	if err != nil {
 		return nil, err
 	}

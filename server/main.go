@@ -39,7 +39,14 @@ var (
 func parseLogTerm(message string) int {
 	// message has the format: log#term
 	split := strings.Split(message, "#")
-	pTerm, _ := strconv.Atoi(split[1])
+	if len(split) < 2 {
+		fmt.Println(message, "error in parsing log term")
+		panic(fmt.Errorf(message, "error in parsing log term"))
+	}
+	pTerm, err := strconv.Atoi(split[1])
+	if err != nil {
+		fmt.Println(message, "error in parsing log term", err.Error())
+	}
 	return pTerm
 }
 
@@ -214,14 +221,9 @@ func (s *Server) replicateLog(followerName string, followerPort int) {
 		go s.commitLogEntries()
 		return
 	}
-	// TODO: end
 
-	if _, ok := s.peerData.SentLength[followerName]; !ok {
-		return
-	}
 	prefixLength := s.peerData.SentLength[followerName]
-	//! suffix := s.logs[prefixLength:] ! it suppose to be this
-	suffix := s.logs[s.peerData.SentLength[followerName]:]
+	suffix := s.logs[prefixLength:]
 	var prefixTerm int
 	if prefixLength > 0 {
 		prefixTerm = parseLogTerm(s.logs[prefixLength-1])
@@ -269,7 +271,8 @@ func (s *Server) appendEntries(prefixLength int, leaderCommitLength int, suffix 
 		}
 	}
 	if prefixLength+len(suffix) > len(s.logs) {
-		for i := len(s.logs); i < len(suffix); i++ {
+		for i := len(s.logs) - prefixLength; i < len(suffix); i++ {
+			// Add log to server logs.
 			s.logs = append(s.logs, suffix[i])
 			err := s.db.LogCommand(suffix[i], s.serverState.Name)
 			if err != nil {
@@ -288,6 +291,32 @@ func (s *Server) appendEntries(prefixLength int, leaderCommitLength int, suffix 
 
 // 8/9 leader receiving log acknowledgements
 // on receiving (LogResponse,follower,term,ack,success) at nodeId do
+// ! has differences
+// func (s *Server) handleLogResponse(request string) string {
+// 	logResponse, err := model.ParseLogResponse(request)
+// 	if err != nil {
+// 		return fmt.Sprintf("Handling Log Response has error on parsing: %s", err.Error())
+// 	}
+// 	if logResponse.CurrentTerm > s.serverState.CurrentTerm {
+// 		s.serverState.CurrentTerm = logResponse.CurrentTerm
+// 		s.role = Follower
+// 		s.serverState.VotedFor = ""
+// 		go s.electionTimer()
+// 	}
+// 	if logResponse.CurrentTerm == s.serverState.CurrentTerm && s.role == Leader {
+// 		s.peerData.SentLength[logResponse.FollowerName] = logResponse.AckLength
+// 		if logResponse.ReplicationSuccessful && logResponse.AckLength >= s.peerData.AckedLength[logResponse.FollowerName] {
+// 			s.peerData.AckedLength[logResponse.FollowerName] = logResponse.AckLength
+// 			s.commitLogEntries()
+// 		} else {
+// 			s.peerData.SentLength[logResponse.FollowerName]--
+// 			s.replicateLog(logResponse.FollowerName, logResponse.FollowerPort)
+// 		}
+// 	}
+
+// 	return "Handling Log Response successful"
+// }
+
 func (s *Server) handleLogResponse(request string) string {
 	logResponse, err := model.ParseLogResponse(request)
 	if err != nil {
@@ -318,14 +347,14 @@ func (s *Server) commitLogEntries() {
 		fmt.Printf("commitLogEntry has error in getting all server: %s", err.Error())
 	}
 	legitNodeCount := len(allNodes) - len(s.peerData.SuspectedNodes)
-	for i := s.serverState.CommitLength - 1; i < len(s.logs); i++ {
+	for i := s.serverState.CommitLength; i < len(s.logs); i++ {
 		ackCount := 0
 		for node := range allNodes {
 			if s.peerData.AckedLength[node] > s.serverState.CommitLength {
 				ackCount++
 			}
 		}
-		if ackCount > (legitNodeCount+1)/2 || legitNodeCount == 1 {
+		if ackCount >= (legitNodeCount+1)/2 || legitNodeCount == 1 {
 			log := s.logs[i]
 			query := db.ExtractQuery(log)
 			_, err = s.db.ExecuteQuery(query)
@@ -390,9 +419,6 @@ func (s *Server) handleLogRequest(request string) string {
 	if logRequest.CurrentTerm > s.serverState.CurrentTerm {
 		s.serverState.CurrentTerm = logRequest.CurrentTerm
 		s.serverState.VotedFor = ""
-		// if s.role == Leader {
-		// 	go s.electionTimer()
-		// }
 	}
 	if s.serverState.CurrentTerm == logRequest.CurrentTerm {
 		if s.role == Leader {
@@ -402,7 +428,7 @@ func (s *Server) handleLogRequest(request string) string {
 		s.leaderNodeName = logRequest.LeaderId
 	}
 	logOk := len(s.logs) >= logRequest.PrefixLength &&
-		(logRequest.PrefixLength == 0 || parseLogTerm(s.logs[len(s.logs)-1]) == logRequest.PrefixTerm)
+		(logRequest.PrefixLength == 0 || parseLogTerm(s.logs[logRequest.PrefixLength-1]) == logRequest.PrefixTerm)
 	if logRequest.CurrentTerm == s.serverState.CurrentTerm && logOk {
 		s.appendEntries(logRequest.PrefixLength, logRequest.CommitLength, logRequest.Suffix)
 		ack := logRequest.PrefixLength + len(logRequest.Suffix)
@@ -430,7 +456,6 @@ func (s *Server) handleConnection(c net.Conn) {
 		request := strings.TrimSpace(data)
 		// !
 		if request == "invalid command" || request == "Handling Log Response successful" {
-			fmt.Println(request)
 			continue
 		}
 		fmt.Printf("> Message: %s \n", request)
@@ -454,7 +479,7 @@ func (s *Server) handleConnection(c net.Conn) {
 		}
 		// 4/9 Broadcasting messages
 		// response is empty means this is not log request/response neither vote request/resposne
-		if s.role == Leader && response == "" {
+		if err := db.ValidateQuery(request); err == nil && s.role == Leader {
 			// Execute Query in Message Get to get data from database
 			// Get values from the leader.
 			if strings.HasPrefix(request, "GET") {
@@ -469,8 +494,8 @@ func (s *Server) handleConnection(c net.Conn) {
 			} else {
 				// on request to broadcast msg at node nodeId do
 				logMessage := createLogMessage(request, s.serverState.CurrentTerm)
-				s.logs = append(s.logs, logMessage)
 				s.peerData.AckedLength[s.serverState.Name] = len(s.logs)
+				s.logs = append(s.logs, logMessage)
 				if err := s.db.LogCommand(logMessage, s.serverState.Name); err != nil {
 					response = "Logging command meets error"
 				}
@@ -482,9 +507,10 @@ func (s *Server) handleConnection(c net.Conn) {
 						s.replicateLog(serverName, serverPort)
 					}
 					// periodically at node nodeId do
-					for s.serverState.CommitLength < len(s.logs)-1 {
+					for s.serverState.CommitLength < len(s.logs) {
 						fmt.Println("Waiting for consensus")
 					}
+					response = "operation sucessful"
 				}
 
 			}

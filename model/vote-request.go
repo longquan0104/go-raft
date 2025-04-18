@@ -14,11 +14,11 @@ type VoteRequest struct {
 }
 
 func (r *VoteRequest) String() string {
-	return "VoteRequest" + "_" + r.CandidateId + "_" + strconv.Itoa(r.CandidateTerm) + "_" + strconv.Itoa(r.CandidateLogLength) + "_" + strconv.Itoa(r.CandidateLogTerm)
+	return "VoteRequest" + "|" + r.CandidateId + "|" + strconv.Itoa(r.CandidateTerm) + "|" + strconv.Itoa(r.CandidateLogLength) + "|" + strconv.Itoa(r.CandidateLogTerm)
 }
 
 func ParseVoteRequest(message string) (*VoteRequest, error) {
-	splits := strings.Split(message, "_")
+	splits := strings.Split(message, "|")
 	if len(splits) < 5 {
 		return nil, errors.New("invalid VoteRequest message")
 	}
