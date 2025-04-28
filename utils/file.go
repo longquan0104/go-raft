@@ -31,6 +31,19 @@ func Write(fName string, message string) error {
 	return file.Close()
 }
 
+// ReWrite writes file with new content.
+func ReWrite(fName string, message string) error {
+	file, err := os.OpenFile(fName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	_, err = file.WriteString(message)
+	if err != nil {
+		return err
+	}
+	return file.Close()
+}
+
 // Read get messages from a file.
 func Read(fName string) ([]string, error) {
 	file, err := os.Open(fName)
